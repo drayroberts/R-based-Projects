@@ -1,0 +1,254 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Course Project
+## Roberts, Damon
+### Data Exploration, Preparation, and Visualization
+
+### Initialize RStudio and import data
+```{r message = FALSE}
+
+library(tidyverse)
+library(VIM)
+library(mice)
+library(GGally)
+library(ranger)
+library(caret)
+library(nnet)
+library(rpart)
+library(rattle)
+
+rain_original = read_csv("rain.csv", col_types = cols(Date = col_date(format = "%m/%d/%Y")))
+```
+
+```{r}
+# Factor the RainToday and RainTomorrow variables
+rain_original = rain_original %>%
+  mutate(RainToday = as.factor(RainToday)) %>%
+  mutate(RainTomorrow = as.factor(RainTomorrow))
+```
+
+*****
+```{r}
+rain = rain_original
+
+# Examine data for missing values
+vim_plot = aggr(rain, numbers = FALSE, prop = c(TRUE, FALSE), cex.axis = 0.7)
+```
+
+*****
+```{r}
+# Use row-wise deletion to remove any missing categorical variables
+rain = rain %>% drop_na(WindGustDir, WindDir9am, WindDir3pm, RainToday, RainTomorrow)
+
+# Check new missingness plot
+vim_plot = aggr(rain, numbers = FALSE, prop = c(TRUE, FALSE), cex.axis=0.7)
+```
+
+*****
+```{r}
+# Impute missing quantitative variables using predictive mean matching ("pmm")
+rain_imp = mice(rain, m=1, method = "pmm", seed = 12345)
+
+# Compare imputed values (red) to observed values (blue)
+densityplot(rain_imp)
+
+# Merge imputed values with original rain dataset
+rain_complete = complete(rain_imp)
+
+summary(rain_complete)
+```
+
+*****
+```{r}
+# Tests to determine if correlation may exist between variables
+
+ggpairs(rain_complete, columns = c(2,3,4,11,12,20), title = "[1] Columns 2,3,4,11,12")
+# Low: MinTemp, MaxTemp, Rainfall, RainToday
+# High: Humidity9am, Humidity3pm
+
+ggpairs(rain_complete, columns = c(13:16,20), title = "[2] Columns 13,14,15,16")
+# Low: Pressure9am, Pressure3pm
+# High: Cloud9am, Cloud3pm
+
+ggpairs(rain_complete, columns = c(6,9,10,17,18,20), title = "[3] Columns 6,9,10,17,18")
+# Low:  WindSpeed9am, WindSpeed3pm, Temp9am
+# High: WindGustSpeed, Temp3pm
+```
+
+*****
+```{r}
+# Creating new variables to study variable differences
+rain_complete = rain_complete %>% mutate(TempDiff = Temp3pm - Temp9am)
+rain_complete = rain_complete %>% mutate(HumidityDiff = Humidity3pm - Humidity9am)
+rain_complete = rain_complete %>% mutate(PressureDiff = Pressure3pm - Pressure9am)
+rain_complete = rain_complete %>% mutate(WindDiff = WindSpeed3pm - WindSpeed9am)
+
+# Plots to study potential correlation between RainTomorrow and changes in humidity, temp, or pressure
+ggplot(rain_complete, aes(RainTomorrow, HumidityDiff)) + geom_boxplot() + labs(title = "Humidity")
+ggplot(rain_complete, aes(RainTomorrow, TempDiff)) + geom_boxplot() + labs(title = "Temperature")
+ggplot(rain_complete, aes(RainTomorrow, PressureDiff)) + geom_boxplot() + labs(title = "Pressure")
+ggplot(rain_complete, aes(RainTomorrow, WindDiff)) + geom_boxplot() + labs(title = "Wind Speed")
+```
+
+*****
+```{r}
+# Select only the variables of interest
+rain_working = rain_complete %>% select(Humidity9am, Humidity3pm, Cloud9am, Cloud3pm, WindGustSpeed, Temp3pm, HumidityDiff, TempDiff,RainTomorrow)
+```
+
+```{r}
+# Split the prepped data into a 70/30 train/test split
+set.seed(1234)
+
+train_rows = createDataPartition(y = rain_working$RainTomorrow, p = 0.7, list = FALSE)
+
+train = rain_working[train_rows,]
+test = rain_working[-train_rows,]
+```
+
+*****
+### Classification tree
+```{r}
+# Builds classification tree predicting RainTomorrow by all variables
+tree1 = rpart(RainTomorrow ~., train, method = "class")
+
+# fancyRpartPlot(tree1)
+```
+
+```{r}
+# Evaluating the tree's performance and identifying the optimal cp (complexity parameter)
+printcp(tree1)
+
+plotcp(tree1)
+```
+
+```{r}
+# Building a new tree with the optimal cp identified above
+tree2 = rpart(RainTomorrow ~., train, cp = .221, method = "class")
+
+printcp(tree2)
+```
+
+```{r}
+# Making predictions on the training set with the tree pruned to optimal cp value
+pred_tree = predict(tree2, train, type = "class")
+
+confusionMatrix(pred_tree, train$RainTomorrow, positive = "Yes")
+```
+
+```{r}
+# Making predictions on the testing set with the pruned tree
+pred_tree2 = predict(tree2, test, type = "class")
+
+confusionMatrix(pred_tree2, test$RainTomorrow, positive = "Yes")
+```
+
+*****
+### Random Forest model
+```{r}
+# Creating a random forest model with 10 k-fold cross-validation and 50 trees
+fit_control = trainControl(method = "cv",
+                           number = 10)
+
+set.seed(1234)
+
+rf_fit = train(x=as.matrix(train[,-9]), y=as.matrix(train$RainTomorrow),    
+                method = "ranger",  
+                importance = "permutation",
+                trControl = fit_control,
+                num.trees = 50)
+```
+
+```{r}
+# Checking variable importance in the random forest model
+varImp(rf_fit)
+```
+
+```{r}
+# Making predictions on training set with the random forest model
+pred_forest = predict(rf_fit, train)
+
+confusionMatrix(pred_forest, train$RainTomorrow, positive = "Yes")
+```
+
+```{r}
+# Making predictions on testing set with random forest model
+pred_forest2 = predict(rf_fit, test)
+
+confusionMatrix(pred_forest2, test$RainTomorrow, positive = "Yes")
+```
+
+*****
+## Neural Networks
+```{r}
+fitControl = trainControl(method = "cv", number = 10)
+
+nnetGrid = expand.grid(size = 12, decay = 0.1)
+
+set.seed(1234)
+
+nnetBasic = train(x = train[,-9],y = train$RainTomorrow,
+                  method = "nnet",
+                  tuneGrid = nnetGrid,
+                  trControl = fitControl,
+                  verbose = FALSE,
+                  trace = FALSE)
+```
+
+```{r}
+# Developing predictions on the training set with a basic neural network
+pred_net_basic = predict(nnetBasic, train)
+
+confusionMatrix(pred_net_basic, train$RainTomorrow, positive = "Yes")
+```
+
+```{r}
+# Searching for the optimal model parameters within size(1-8) and decay(0.1-0.5)
+fitControl = trainControl(method = "cv", number = 10)
+
+nnetGrid =  expand.grid(size = seq(from = 1, to = 8, by = 1),
+                        decay = seq(from = 0.1, to = 0.5, by = 0.1))
+set.seed(1234)
+
+nnetFit = train(x=train[,-9],y=train$RainTomorrow, 
+                 method = "nnet",
+                 trControl = fitControl,
+                 tuneGrid = nnetGrid,
+                 verbose = FALSE,
+                 trace = FALSE)
+```
+
+```{r}
+# Checking the various networks for optimal output
+nnetFit
+
+# Plotting model accuracies
+plot(nnetFit)
+```
+
+*****
+```{r}
+# Developing predictions on the training set with the fitted model
+pred_net_fit = predict(nnetFit, train)
+
+confusionMatrix(pred_net_fit, train$RainTomorrow, positive = "Yes")
+```
+
+*****
+```{r}
+# Developing predictions on the testing set with a basic neural network
+pred_net_basic2 = predict(nnetBasic, test)
+
+confusionMatrix(pred_net_basic2, test$RainTomorrow, positive = "Yes")
+```
+
+*****
+```{r}
+# Developing predictions on the testing set with the fitted model
+pred_net_fit2 = predict(nnetFit, test)
+
+confusionMatrix(pred_net_fit2, test$RainTomorrow, positive = "Yes")
+```
