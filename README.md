@@ -1,1 +1,5 @@
-# R-based-Projects
+This report attempts to study data collected regarding Title IX impressions from two sources, freshman surveys (dataset 1) and Twitter posts (dataset 2). Methods of analysis include trend, correlation, and sentiment analysis, with information presented in bar graphs, text networks, and wordclouds.
+
+Dataset 1 was collected from freshmen via surveys administered in eight residence halls over four days during the final exam week of May 2016. The surveys were administered after students viewed an informational video where four scenarios were acted out to explain key components of the Title IX mandate. This dataset includes 204 observations (responses) with 22 variables (questions) each.
+
+Dataset 2 was collected with API scraping of Twitter posts which mentioned keywords titleix, title ix, titleixmandate, and title9. It included a total of 666 observations (tweets or retweets) with 17 variables. For the purpose of this study, we’re only interested in 4 variables: date, retweet number, ID number, and the tweet contents.
