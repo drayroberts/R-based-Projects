@@ -1,0 +1,285 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Roberts, Damon
+## Text Analysis Project: Title IX Mandate to Report
+
+*****
+## Introduction
+This report attempts to study data collected regarding Title IX impressions from two sources, freshman surveys (dataset 1) and Twitter posts (dataset 2). Methods of analysis include trend, correlation, and sentiment analysis, with information presented in bar graphs, text networks, and wordclouds.
+
+Dataset 1 was collected from freshmen via surveys administered in eight residence halls over four days during the final exam week of May 2016. The surveys were administered after students viewed an informational video where four scenarios were acted out to explain key components of the Title IX mandate. This dataset includes 204 observations (responses) with 22 variables (questions) each.
+
+Dataset 2 was collected with API scraping of Twitter posts which mentioned keywords *titleix*, *title ix*, *titleixmandate*, and *title9*. It included a total of 666 observations (tweets or retweets) with 17 variables. For the purpose of this study, we're only interested in 4 variables: date, retweet number, ID number, and the tweet contents.
+
+```{r code for cleaned report, include=FALSE}
+#Add to remove code and output from knitted document
+
+#knitr:: opts_chunk$set(echo=FALSE, fig.width=8, warning=FALSE)
+```
+
+```{r initialize}
+library(tidyr)
+library(tidytext)
+library(tidyverse)
+library(dplyr)
+library(widyr)
+library(wordcloud)
+library(reshape2)
+library(ggraph)
+library(igraph)
+
+undesirable_words <- data.frame(word=c("makes","title","Title","ix","IX","titleix","mandate","people","sexual","think","does","would"))
+
+fix.contractions <- function(doc) {
+ doc <- gsub("won't", "will not", doc)
+ doc <- gsub("can't", "can not", doc)
+ doc <- gsub("n't", " not", doc)
+ doc <- gsub("'ll", " will", doc)
+ doc <- gsub("'re", " are", doc)
+ doc <- gsub("'ve", " have", doc)
+ doc <- gsub("'m", " am", doc)
+ doc <- gsub("'d", " would", doc)
+ doc <- gsub("'s", "", doc)
+ return(doc)
+}
+```
+
+*****
+## Part 1 : Study of Responses from Freshman survey
+What are word co-occurances on how info on title IX mandate makes respondants feel (Q7) {sentiment cloud}
+```{r}
+part1 <- read.csv("titleixparti.csv", stringsAsFactors = FALSE) %>%
+  select("Age" = "Q1...age",
+         "Race_Ethnicity" = "Q2...race.ethnicity",
+         "Freshman" = "Q3...freshman",
+         "On-campus" = "Q4...live.on.campas",
+         "IntlStudent" = "Q5...international.student",
+         starts_with("Q"))
+
+names(part1) <- sub("\\...+","",names(part1))
+
+part1$ID <- seq.int(nrow(part1))
+
+part1[6:20] <- sapply(part1[6:20], fix.contractions)
+```
+
+### How do responding freshmen women feel about the Title IX Mandate information they were presented?
+```{r wordcloud}
+Q7_tidy <- part1 %>%
+  select(Q7) %>%
+  unnest_tokens("word", Q7) %>%
+  filter(!word %in% stop_words$word) %>%
+  filter(!word %in% undesirable_words$word) %>%
+  filter(nchar(word)>3)
+
+Q7_tidy %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort=TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill=0) %>%
+  comparison.cloud(colors = c("#FF655B","#5B99FF"), max.words=100)
+```
+
+From this wordcloud, we can see a distribution of common words used in response to Question 7 organized by its relation to positive or negative emotions. This question reads "How does the information about the Title IX Mandate make you feel?" The most common words are largest, such as *safe* and *assault*. We can see positive words like *safe*, *protect*, *helpful*, and *comfortable* are mentioned often among the responses, indicating these terms relate to a number of freshmen women. In the other direction, negatively-associated words like *assault*, *uncomfortable*, and *issue* are also brought up often. We can make an assumption that the Title IX mandate information helped some women feel safe and comfrotable, while it also highlighted issues around assault.
+
+*****
+### Does age make a difference in the most common words used in response to question 8?
+```{r}
+Q8_tidy <- part1 %>%
+  select(Age, Race_Ethnicity, Q8) %>%
+  unnest_tokens("word",Q8) %>%
+  filter(!word %in% undesirable_words$word) %>%
+  filter(nchar(word)>3)
+
+popular_words_age <- Q8_tidy %>%
+  group_by(Age) %>%
+  filter(!Age == "20 years old") %>%
+  count(word, Age, sort=TRUE) %>%
+  slice(1:15) %>%
+  ungroup() %>%
+  arrange(Age, n) %>%
+  mutate(row=row_number())
+
+popular_words_age %>%
+  ggplot(aes(row,n,fill=Age)) +
+  geom_col(show.legend=FALSE) +
+  labs(x = NULL, y = "Count", title="Most commonly used words by age") +
+  facet_wrap(~Age, scales="free") + 
+  scale_x_continuous(breaks=popular_words_age$row, labels=popular_words_age$word) +
+  coord_flip()
+```
+
+The above figure shows the 15 most-common words used in response to question 8, which reads "After viewing the video about the Title IX Mandate, how do you think you would behave if you were to experience nonconsensual sexual contact by another student?" The responses are broken into two graphs, separated by reported age of respondent (only one respondent indicated they were 20 years old, so that value was ommitted due to small sample size). A majority of the words in both graph are filler words with little meaning, but there are a few unique values. 19-year-olds mention *friends* often, while the word is not among the top 15 of 18-year olds. 18-year olds tend to mention *counseling* and *provider* more often than the older group, suggesting they feel support services are an important factor in reacting to nonsexual contact.
+
+*****
+### What are some common sentiments among how the Title IX Mandate information made respondents feel?
+```{r}
+  Q7_tidy <- part1 %>%
+  select(Q7) %>%
+  unnest_tokens("word",Q7) %>%
+  filter(!word %in% undesirable_words$word) %>%
+  filter(nchar(word)>3)
+
+Q7_sentiment <- Q7_tidy %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment) %>%
+  group_by(sentiment) %>%
+  arrange(desc(n),.by_group=TRUE)
+
+Q7_sentiment %>%
+  filter(!sentiment %in% c("disgust","surprise")) %>%
+  slice(1:6) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  
+  ggplot(aes(x = word, y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free", ncol = 3) +
+  coord_flip() +
+  labs(title = "Word popularity by sentiment")
+```
+
+As mentioned above, question 7 asks how respondents feel after learning about the Title IX Mandate. This figure organizes responses into common sentiments. The information presented by this type of analysis could be used to present Title IX information in a particular manner to elicit the desired emotional response. Anger, fear, and trust are all expected emotions associated with the context of Title IX information. Words like *assault* and *rape* fall into multiple categories like anger, fear, and sadness. More positive associations like joy and, in some cases, anticipation include words like *safe* and *resources*.
+
+*****
+### 
+### What are common themes when asking for suggestions to create the ideal campus?
+```{r text-network}
+Q20_tidy <- part1 %>%
+  select(Q20,ID) %>%
+  unnest_tokens("word",Q20) %>%
+  filter(!word %in% undesirable_words$word) %>%
+  filter(nchar(word)>3)
+
+Q20_cors <- Q20_tidy %>%
+  group_by(word) %>%
+  filter(n() >= 3) %>%
+  pairwise_cor(word, ID, sort=TRUE)
+  
+Q20_cors %>% 
+  filter(correlation > 0.3) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout="fr") +
+  geom_edge_link(aes(edge_alpha=correlation), show.legend=FALSE) +
+  geom_node_point(color="lightgreen",size=3) +
+  geom_node_text(aes(label=name), repel=TRUE) +
+  theme_void()
+```
+
+In this final figure for Part 1, we've created a text network to highlight common relationships in responses to question 20. This question reads "What can you and other students do to create and maintain an ideal campus community?" The network presented here maps common words used in response to the question and links them by correlation. Stronger correlations indicate an increased liklihood words will be mentioned together and is symbolized by darker connecting lines in the network. Groupings like *social-activites* and *resources-aware-needs* indicate students feel social activities and making resources more well-known are important to building the ideal campus. Others, like *respectful-others* and *treat-respect* suggest the students should take a better approach to being respectful to each other.
+
+*****
+### Considerations
+While we were able to gain some insights from this data, there were limitations to be aware of. First, the dataset used for this study was small with only 104 valid observations. This reduces the amount of information which could be gained, while a larger dataset could reveal stronger trends. In addition, the majority of respondents were white/caucasian females aged 19-20. This does provide some information into that specific demographic, but there's potential for bias among the responses as most repondents fall into the same demographic groups. Using a wider range of respondents could help reduce that bias and introduce more varied responses.
+
+*****
+## Part 2 - Twitter Post Analysis
+
+```{r data tidy}
+part2 <- read.csv("titleixpartii.csv", stringsAsFactors = FALSE) %>%
+  select(text, "date" = created, retweets = retweetCount)
+
+part2$ID <- seq.int(nrow(part2))
+
+part2$text <- sapply(part2$text, fix.contractions)
+
+undesirable_words2 <- data.frame(word=c("https","t.co"))
+
+part2_tidy <- part2 %>%
+  unnest_tokens("word", text) %>%
+  filter(!word %in% stop_words$word) %>%
+  filter(!word %in% undesirable_words$word) %>%
+  filter(!word %in% undesirable_words2$word) %>%
+  filter(nchar(word)>3)
+```
+
+
+-What are some the most commonly-mentioned words in related tweets?
+```{r}
+popular_tweets <- part2_tidy %>%
+  count(word, sort=TRUE) %>%
+  slice(1:20) %>%
+  ungroup() %>%
+  mutate(word = reorder(word,n))
+
+my_colors <- c("#FF2F2F","#00CD06","#0B6BFF")
+
+popular_tweets %>%
+  ggplot() +
+  geom_col(aes(word,n),fill=my_colors[3],show.legend=FALSE) +
+  labs(x = NULL, y = "Count", title="Most common words in Tweets") +
+  coord_flip()
+```
+
+The above figure shows a graph of words most often used in tweets mentioning something related to Title IX. The two most common terms are *missouri* and *tonymess*. TonyMess is the Twitter handle for Tony Messenger, a columnist who was outspoken about changes to Title IX proposed by a Missouri lawmaker. *Bills* and *lobbyst* are also often-used, highlighting how often Twitter is used to discuss political climates around certain topics. Other common words include *assault*, *campus*, and *college*, which are similar to the words found in our pervious analysis of survey feedback. 
+
+*****
+What are common sentiments among those posting content related to Title IX? 
+```{r}
+tweet_sentiment <- part2_tidy %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment) %>%
+  group_by(sentiment) %>%
+  arrange(desc(n),.by_group=TRUE)
+
+tweet_sentiment %>%
+  slice(1:6) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  
+  ggplot(aes(x = word, y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free", ncol = 3) +
+  coord_flip() +
+  labs(title = "Most common words per sentiment")
+```
+
+These graphs help categorize common words within Twitter posts into 10 different categories corresponding to common emotions in the English language. Similer to earlier, Anger, Negative, and Fear are three of the most common emotions associated with Title IX comments. We're beginning to see how much more political this dataset is than the set from freshman student surveys. With words like *money*, *president*, and *court*, there seems to be more emphasis on changes higher than the university level. There are a number of analysts and politicians on Twitter, so it's expected to see more meta discussion about Title IX issues.
+
+*****
+Was there a difference in tweet polarity over time?
+```{r}
+tweet_bing <- part2_tidy %>%
+  inner_join(get_sentiments("bing"))
+
+tweet_polarity <- tweet_bing %>%
+  count(sentiment, date) %>%
+  spread(sentiment, n, fill=0) %>%
+  mutate(polarity = positive - negative)
+
+my_colors <- c("#F23F23","#A2A2A2")
+
+tweet_polarity %>%
+  ggplot(aes(x=date, y=polarity, color=ifelse(polarity >=0, my_colors[1],my_colors[2]))) +
+  geom_col(show.legend=FALSE) +
+  labs(x = NULL, y = "Polarity", title = "Tweet Polarity over Time") +
+  theme(axis.text.x = element_blank(), axis.ticks.x=element_blank())
+```
+
+This figure shows the polarity of each tweet within the dataset as compared to the "bing" lexicon. This lexicon categorizes words as either positive or negative, which we can then use to score the polarity of each tweet. There's a clear difference in the number of positive vs negative tweets, with about double the amount of negative sentimentality as positive. The graph is laid out chronologically to study if any trends changed over time. While tweets were generall negatively-associated, there was a short period where tweers were almost all considered positive. A 2-hour span from 4/23 11:58pm to 4/24 1:51am showed polarity scores around 1 or 2, suggesting a short period where tweets were most positive than negative. However, looking at the tweets in question shows a majority of posts during this time were retweets of two popular posts.
+
+*****
+Are there relationships or themes between certain words?
+```{r}
+tweet_cors <- part2_tidy %>%
+  group_by(word) %>%
+  filter(n() >= 10) %>%
+  pairwise_cor(word, ID, sort=TRUE)
+  
+tweet_cors %>% 
+  filter(correlation > 0.4) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout="fr") +
+  geom_edge_link(aes(edge_alpha=correlation), show.legend=FALSE) +
+  geom_node_point(color="purple",size=3) +
+  geom_node_text(aes(label=name), repel=TRUE) +
+  theme_void()
+```
+
+The text network above illustrates the relationships between words with a high correlation, or high chance to be associated with each other. This network has a few more isolated groups than the one from the freshman survey, partly due to a larger sample size. One group includes words like *appealed*, *process*, and *procedural*, suggesting words in that cluster are more likely to be related to legal proceedings. A similar group includes *federal* and *judge*. Other clusters relate more to university-level processes with relationships like *admin-expelled-student*. These clusters give a good overview of the general discussion topics on Twitter, whether it's at the political or university level.
+
+*****
+### Considerations
+This dataset addressed one of the larger issues of the dataset from the freshman survey, in that it provided many more observations to study. However, the threat of bias is just as real, if not moreso. Social media often allows for an "echo chamber" effect, where users can curate their social networks based on their personal interest in beliefs. This leads to groups sharing and reinforcing their own ideas while failing to consider opposing viewpoints. In this case, we have to consider the possibility that many of these tweets came from a network of users who feel a certain way about Title IX policies. This is especially true when dealing with Twitter datasets, as a fair portion of the data includes retweets, which are simply duplicate observations.
